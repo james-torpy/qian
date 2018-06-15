@@ -1,0 +1,242 @@
+# to qsub snakemake:
+#source activate snakemake
+#log_dir=/share/ScratchGeneral/jamtor/projects/qian/logs/
+#script_dir=/share/ScratchGeneral/jamtor/projects/qian/
+#snake_line="snakemake -s $script_dir/Snakefile --cores 24"
+#qsub -N qrep -b y -wd $log_dir -j y -R y -pe smp 26 -V $snake_line
+
+
+#############################################################
+### 0. Set up variables and paths ###
+#############################################################
+
+import os
+import re
+os.system('module load gi/zlib/1.2.8')
+os.system('module load phuluu/samtools/1.4')
+os.system('module load gi/novosort/precompiled/1.03.08')
+os.system('module load hugfre/HTSeq/0.5.4p3')
+
+exp_name = 'exp2'
+
+# define/create directories:
+home_dir = '/share/ScratchGeneral/jamtor/'
+
+project_dir = home_dir + '/projects/qian/'
+
+raw_dir = project_dir + 'raw_files/' + exp_name
+
+results_dir = project_dir + 'results/' + exp_name
+
+fastq_dir = 'raw_files/' + exp_name + '/fastq/'
+if not os.path.exists(project_dir + '/' + fastq_dir):
+	os.makedirs(project_dir + '/' + fastq_dir)
+
+star_GC_dir = 'results/' + exp_name + '/star/GC/'
+if not os.path.exists(project_dir + '/' + star_GC_dir):
+	os.makedirs(project_dir + '/' + star_GC_dir)
+
+star_ribo_dir = 'results/' + exp_name + '/star/ribo/'
+if not os.path.exists(project_dir + '/' + star_GC_dir):
+	os.makedirs(project_dir + '/' + star_GC_dir)
+
+temp_sort_dir = star_GC_dir + 'temp/'
+if not os.path.exists(project_dir + '/' + temp_sort_dir):
+	os.makedirs(project_dir + '/' + temp_sort_dir)
+
+htseq_dir = 'results/' + exp_name + '/htseq/'
+if not os.path.exists(project_dir + '/' + htseq_dir):
+	os.makedirs(project_dir + '/' + htseq_dir)
+
+Robject_dir = 'Robjects/' + exp_name
+if not os.path.exists(project_dir + '/' + Robject_dir):
+	os.makedirs(project_dir + '/' + Robject_dir)
+	
+SAMPLES = [ re.sub('_[0-9].fastq.gz', '', x) for x in list(os.walk(project_dir + '/' + fastq_dir))[0][2] ]
+
+print(' '.join(SAMPLES))
+
+#SAMPLES = [ 'test' ]
+
+#############################################################
+### 1. Map fastq files ###
+#############################################################
+
+rule all:
+	input:
+		expand(star_ribo_dir + '{sample}/Log.final.out', \
+			sample=SAMPLES),
+		expand(htseq_dir + '{sample}.all.htseq.txt', \
+			sample=SAMPLES),
+		expand(htseq_dir + '{sample}.gc.htseq.txt', \
+			sample=SAMPLES),
+		expand(htseq_dir + '{sample}.all_reps.htseq.txt', \
+			sample=SAMPLES)
+#		,expand(htseq_dir + '{sample}.processed', \
+#			sample=SAMPLES)
+
+rule star:
+	input:
+		fq1 = fastq_dir + '{sample}_1.fastq.gz',
+		fq2 = fastq_dir + '{sample}_2.fastq.gz'
+	output:
+		star_GC_dir + '{sample}/Aligned.out.bam',
+		star_GC_dir + '{sample}/Log.final.out',
+		star_GC_dir + '{sample}/Chimeric.out.junction',
+		star_GC_dir + '{sample}/Chimeric.out.sam'
+	threads: 6
+	shell:
+		'/home/jamtor/local/bin/STAR --runMode alignReads ' +
+      	' --readFilesCommand zcat ' +
+	    '--genomeDir /share/ScratchGeneral/jamtor/projects/qian/refs/hg19_ercc/ ' +
+	    '--outFilterType BySJout ' +
+	    '--outSAMattributes NH HI AS NM MD ' +
+	    '--outFilterMultimapNmax 999 ' +
+	    '--outMultimapperOrder Random ' +
+	    '--runRNGseed 666 ' +
+	    '--outSAMmultNmax 1 ' +
+	    '--outFilterMismatchNmax 999 ' +
+	    '--outFilterMismatchNoverReadLmax 0.04 ' +
+	    '--alignIntronMin 20 ' +
+	    '--alignIntronMax 1500000 ' +
+	    '--alignMatesGapMax 1500000 ' +
+	    '--alignSJoverhangMin 6 ' +
+	    '--alignSJDBoverhangMin 1 ' +
+	    '--readFilesIn {input.fq1} {input.fq2} ' +
+	    '--outFileNamePrefix ' + project_dir + '/' + 
+	    	star_GC_dir + '{wildcards.sample}/ ' + 
+	    '--runThreadN 6 ' +
+	    '--outFilterMatchNmin 76 ' +
+	  	'--chimSegmentMin 25 ' +
+	    '--chimJunctionOverhangMin 25 ' +
+	    '--chimScoreMin 0 ' +
+	    '--chimScoreDropMax 20 ' +
+	    '--chimScoreSeparation 10 ' +
+	    '--chimScoreJunctionNonGTAG -1 ' +
+	    '--outSAMtype BAM Unsorted'
+
+
+##########################################################################
+### 2. Map ribo contamination ###
+##########################################################################
+
+rule star_ribo:
+	input:
+		fq1 = fastq_dir + '{sample}_1.fastq.gz',
+		fq2 = fastq_dir + '{sample}_2.fastq.gz'
+	output:
+		star_ribo_dir + '{sample}/Log.final.out'
+	threads: 6
+	shell:
+		'/home/jamtor/local/bin/STAR --runMode alignReads \
+     	--readFilesCommand zcat \
+     	--genomeDir /share/ScratchGeneral/jamtor/projects/qian/refs/ribosome/ \
+  		--outFilterType BySJout \
+    	--outSAMattributes NH HI AS NM MD\
+    	--outFilterMultimapNmax 999 \
+     	--outMultimapperOrder Random \
+     	--runRNGseed 666 \
+     	--outSAMmultNmax 1 \
+    	--outFilterMismatchNmax 999 \
+    	--outFilterMismatchNoverReadLmax 0.04 \
+    	--alignIntronMin 20 \
+    	--alignIntronMax 1500000 \
+    	--alignMatesGapMax 1500000 \
+    	--alignSJoverhangMin 6 \
+    	--alignSJDBoverhangMin 1 \
+    	--readFilesIn {input.fq1} {input.fq2} \
+    	--outFileNamePrefix ' + project_dir + '/' + 
+	    	star_ribo_dir + '{wildcards.sample}/ ' +
+    	'--runThreadN 6 \
+    	--outFilterMatchNmin 76 \
+      	--outSAMtype BAM Unsorted'
+
+
+#############################################################
+### 3. Sort bams by name ###
+#############################################################
+
+rule novosort:
+	input:
+		star_GC_dir + '{sample}/Aligned.out.bam'
+	output:
+		star_GC_dir + '{sample}/Aligned.novosortedByName.out.bam'
+	threads: 6
+	shell:
+		'/home/jamtor/local/bin/novocraft/novosort -t ' + 
+		temp_sort_dir + ' -n -c 6 -m 22G {input} > {output}'
+
+
+##########################################################################
+### 2. Count GC genes ###
+##########################################################################
+
+rule htseq_gc:
+	input:
+		star_GC_dir + '{sample}/Aligned.novosortedByName.out.bam'
+	output:
+		htseq_dir + '{sample}.gc.htseq.txt'
+	threads: 6
+	shell:
+		'source activate p2.7env; htseq-count -f bam -t exon -a 0 ' +
+		'-m intersection-strict {input} ' +
+		'/share/ScratchGeneral/jamtor/projects/qian/refs/hg19_ercc/gencode_ercc.v19.annotation.gtf ' +
+		'>> {output}; touch ' + htseq_dir + '/gc_counted'
+
+
+##########################################################################
+### 4. Count all repeat genes ###
+##########################################################################
+
+rule htseq_all:
+	input:
+		star_GC_dir + '{sample}/Aligned.novosortedByName.out.bam'
+	output:
+		htseq_dir + '{sample}.all.htseq.txt'
+	threads: 6
+	shell:
+		'source activate p2.7env; htseq-count -f bam -i ID -t exon ' + 
+		'--stranded=no -a 0 -m intersection-strict {input} ' +
+		'/share/ScratchGeneral/jamtor/projects/qian/refs/all_rep.hg19.gff ' +
+		'>> {output}; touch ' + htseq_dir + '/all_counted'
+
+
+##########################################################################
+### 5. Count all repeat gene ids ###
+##########################################################################
+
+rule htseq_all_reps:
+	input:
+		star_GC_dir + '{sample}/Aligned.novosortedByName.out.bam'
+	output:
+		htseq_dir + '{sample}.all_reps.htseq.txt'
+		#txt = htseq_dir + '{sample}.all_reps.htseq.txt',
+		#sam = htseq_dir + '{sample}.all_reps.out.sam'
+
+	threads: 6
+	shell:
+		'source activate p2.7env; htseq-count -f bam -i ID -t exon ' + 
+		'--stranded=no -a 0 -m intersection-strict -o ' + htseq_dir + 
+		'{wildcards.sample}.all_reps.out.sam {input} ' +
+		'/share/ScratchGeneral/jamtor/projects/qian/refs/custom3rep.hg19.gff ' +
+		'>> {output}; touch ' + htseq_dir + '/all_repeats_counted'
+
+
+###########################################################################
+#### 6. Prepare all counts for DE analysis ###
+###########################################################################
+#
+#if ( os.path.isfile(project_dir + '/' + htseq_dir + '/gc_counted') and 
+#	os.path.isfile(project_dir + '/' + htseq_dir + '/all_counted') and
+#	os.path.isfile(project_dir + '/' + htseq_dir + '/all_repeats_counted')):
+#	os.system('Rscript ' + project_dir + '/scripts/1.prepareCounts.R')
+#
+#rule dummy:
+#	input:
+#		htseq_dir + '{sample}.all_reps.htseq.txt'
+#	output:
+#		htseq_dir + '{sample}.processed'
+#	shell:
+#		'if [ -f ' + project_dir + '/' + htseq_dir + '/all_repeats_counted ] \
+#		touch {output}'
+
